@@ -17,7 +17,12 @@ public class MainActivity extends AppCompatActivity {
         tv.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                tv.mockClick();
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        tv.mockClick();
+                    }
+                }).start();
             }
         });
         try {

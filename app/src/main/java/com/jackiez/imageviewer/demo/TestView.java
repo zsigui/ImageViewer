@@ -184,7 +184,7 @@ public class TestView extends View {
             mOptions.inSampleSize = startScale;
         }
 
-
+        mDrawBitmap = mDecoder.decodeRegion(mPicRect, mOptions);
         Log.d("TestView", "pic.l = " + mPicRect.left + ", t = " + mPicRect.top + ", r = " + mPicRect.right + ", b = " + mPicRect.bottom);
         Log.d("TestView", "vis.l = " + mVisibleRect.left + ", t = " + mVisibleRect.top + ", r = " + mVisibleRect.right + ", b = " + mVisibleRect.bottom);
 
@@ -229,53 +229,124 @@ public class TestView extends View {
     int mScrollY = 0;
     int mDownX;
     int mDownY;
-
+    private Bitmap mDrawBitmap;
     /**
-     * 模拟放大操作处理
+     * 模拟放大操作处理，可在线程中执行
      */
     public void mockClick() {
-        // 定义放大点位置 (1/2 * vw, 1/3 * vh)
         // scrollX, scrollY
         Log.d("TestView", "mockClick.call()");
+        // 定义放大点位置 (1/2 * vw, 1/3 * vh)
 //        int scaleX = mVisibleRect.width() >> 1;
 //        int scaleY = mVisibleRect.height() / 3;
         int scaleX = mDownX;
         int scaleY = mDownY;
 
-        int realScaleX = (int) (scaleX / mScale + 0.5f);
-        int realScaleY = (int) (scaleY / mScale + 0.5f);
+        final float lastScale = mScale;
 
-        if (mScale == 1) {
-            // scale > 1 表示放大，即是单位可见区域显示像素缩小， scale < 1 则是缩小
-            // 此处表示放大两倍
-            mScale = 2;
-        } else {
-            mScale = 1;
+        // 以下暂时针对 LoadState == LOAD_HORIZONTAL 这种情况处理
+        final int screenHeight = getMeasuredHeight();
+        final int screenWidth = getMeasuredWidth();
+
+
+//        int realScaleX = (int) (scaleX / lastScale + 0.5f);
+//        int realScaleY = (int) (scaleY / lastScale + 0.5f);
+        // 计算上一次缩放参数下可视视图的宽高
+        int visWidth = (int) (screenWidth * lastScale + 0.5f);
+        int visHeight = visWidth * srcImageHeight / srcImageWidth;
+
+        // 计算当前缩放中心点所在位置在当前屏幕中的比例值，以后续根据它来确定缩放后的位图区域
+        float scalePosFactorX = (float) scaleX / screenWidth;
+        float scalePosFactorY = (float) scaleY / screenHeight;
+        int padding;
+        // 当视图中除位图区域外还有留白，则需要考虑留白处点击的处理，此处按边界值计算
+        if (visHeight < screenHeight) {
+            padding = (screenHeight - visHeight) >> 1;
+            if (scaleY <= padding) {
+                scalePosFactorY = 0f;
+            } else if (scaleY >= visHeight + padding) {
+                scalePosFactorY = 1f;
+            } else {
+                scalePosFactorY = (float) (scaleY - padding) / visHeight;
+            }
         }
-        int realImgWidth = (int) (srcImageWidth / mScale + 0.5f);
+        if (visWidth < screenWidth) {
+            padding = (screenWidth - visWidth) >> 1;
+            if (scaleX < padding) {
+                scalePosFactorX = 0f;
+            } else if (scaleY >= visWidth + padding) {
+                scalePosFactorX = 1f;
+            } else {
+                scalePosFactorX = (float) (scaleX - padding) / visWidth;
+            }
+        }
+
+        float curScale; // 此处新的缩放值需要通过判断获取
+        // scale > 1 表示放大，即是单位可见区域显示像素缩小,相当于缩小可视图里的位图区域， scale < 1 则是相反，表示缩小
+        if (lastScale > 1) {
+            // 此前处于放大状态，恢复到1
+            curScale = 1;
+        } else {
+            // 此前处于默认或者缩小状态，判断是否位图高度小于可见视图高度，小于则计算缩放该差距，否则直接进行2倍放大
+            if (visHeight < screenHeight) {
+                // (visHeight == screenHeight) = screenWidth * lastScale * srcImageHeight / srcImageWidth;
+                curScale = (screenHeight * srcImageWidth) / (screenWidth * srcImageHeight);
+            } else
+                curScale = 2;
+        }
+        // 根据新的缩放值计算当前可视视图区域及对应位图区域
+        int realImgWidth = (int) (srcImageWidth / curScale + 0.5f);
         int realImgHeight = realImgWidth * getMeasuredHeight() / getMeasuredWidth();
-        // 计算中心点坐标的实际位置
-        int relativeX = (int) (realImgWidth * ((float) scaleX / mVisibleRect.width()) + 0.5f);
-        int relativeY = (int) (realImgHeight * ((float) scaleY / mVisibleRect.height()) + 0.5f);
-        Log.d("TestView", "mockClick.call() rx = " + relativeX + ", ry = " + relativeY + ", riw = " +realImgWidth + ", rih = " + realImgHeight
-        + ", realScaleX = " + realScaleX + ", realScaleY = " + realScaleY);
-        if (relativeX > realScaleX + mScrollX) {
+        visWidth = (int) (screenWidth * curScale + 0.5f);
+        visHeight = visWidth * srcImageHeight / srcImageWidth;
+
+        // 表示新缩放值下，图片展示的可见区域在视图范围之内，置中
+        // 有必要还需要考虑padding的存在,暂时这里先不考虑减少复杂度
+        if (visWidth <= screenWidth) {
+            mVisibleRect.left = (screenWidth - visWidth) >> 1;
+            mVisibleRect.right = mVisibleRect.left + visWidth;
+            // 此时图片区域宽部分肯定是完全显示的
             mPicRect.left = 0;
-            mPicRect.right = realImgWidth;
-        } else {
-            mPicRect.left = realScaleX + mScrollX - relativeX;
-            mPicRect.right = mPicRect.left + realImgWidth;
+            mPicRect.right = srcImageWidth;
         }
-
-        if (relativeY > realScaleY + mScrollY) {
+        if (visHeight <= screenHeight) {
+            mVisibleRect.top = (screenHeight - visHeight) >> 1;
+            mVisibleRect.bottom = mVisibleRect.top + visHeight;
             mPicRect.top = 0;
-            mPicRect.bottom = realImgHeight;
-        } else {
-            mPicRect.top = relativeY + mScrollY - relativeY;
-            mPicRect.bottom = mPicRect.top + realImgHeight;
+            mPicRect.bottom = srcImageHeight;
         }
-        invalidate();
 
+        // 区分是缩小还是放大
+        if (curScale > 1) {
+        } else {
+
+        }
+
+        mScale = curScale;
+        mDrawBitmap = mDecoder.decodeRegion(mPicRect, mOptions);
+        // 请求重新绘制
+        postInvalidate();
+
+        // 计算中心点坐标的实际位置
+//        int relativeX = (int) (realImgWidth * ((float) scaleX / mVisibleRect.width()) + 0.5f);
+//        int relativeY = (int) (realImgHeight * ((float) scaleY / mVisibleRect.height()) + 0.5f);
+//        Log.d("TestView", "mockClick.call() rx = " + relativeX + ", ry = " + relativeY + ", riw = " +realImgWidth + ", rih = " + realImgHeight
+//        + ", realScaleX = " + realScaleX + ", realScaleY = " + realScaleY);
+//        if (relativeX > realScaleX + mScrollX) {
+//            mPicRect.left = 0;
+//            mPicRect.right = realImgWidth;
+//        } else {
+//            mPicRect.left = realScaleX + mScrollX - relativeX;
+//            mPicRect.right = mPicRect.left + realImgWidth;
+//        }
+//
+//        if (relativeY > realScaleY + mScrollY) {
+//            mPicRect.top = 0;
+//            mPicRect.bottom = realImgHeight;
+//        } else {
+//            mPicRect.top = relativeY + mScrollY - relativeY;
+//            mPicRect.bottom = mPicRect.top + realImgHeight;
+//        }
     }
 
     @Override
@@ -311,8 +382,10 @@ public class TestView extends View {
         Log.d("TestView", "onDraw.isCall = " + mPicRect.left + ", " + mPicRect.top + ", " + mPicRect.right + ", " + mPicRect.bottom);
         // 进行当前图片区域计算
         // 计算切割实际图形区域大小，再实际绘制到屏幕上
-        Bitmap bp = mDecoder.decodeRegion(mPicRect, mOptions);
-        canvas.drawBitmap(bp, mPicRect, mVisibleRect, mPaint);
+//        Bitmap bp = mDecoder.decodeRegion(mPicRect, mOptions);
+//        canvas.drawBitmap(bp, mPicRect, mVisibleRect, mPaint);
+        if (mDrawBitmap != null)
+            canvas.drawBitmap(mDrawBitmap, mPicRect, mVisibleRect, mPaint);
 
     }
 
