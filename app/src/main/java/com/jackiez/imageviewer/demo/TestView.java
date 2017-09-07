@@ -169,20 +169,20 @@ public class TestView extends View {
         // 原理是加载同样比例的图形块，然后缩放填充到更小的可见区域中，那么总体缩放效果一致，但是提前缩放减少了先将未缩放的图片加载到内存中
         final int visWidth = mVisibleRect.width();
         final int visHeight = mVisibleRect.height();
-        if (tmpImgHeight > visHeight
-                || tmpImgWidth > visWidth) {
-            // 图片区域 > 可见区域，进行缩放，找到适合的缩放精度
-            int startScale = 1;
-            mOptions.inSampleSize = 1;
-            while (tmpImgHeight > visHeight
-                    && tmpImgWidth > visWidth) {
-                tmpImgHeight = tmpImgHeight >> 1;
-                tmpImgWidth = tmpImgWidth >> 1;
-                startScale = startScale << 1;
-            }
-            Log.d("TestView", "startStcale = " + startScale);
-            mOptions.inSampleSize = startScale;
-        }
+//        if (tmpImgHeight > visHeight
+//                || tmpImgWidth > visWidth) {
+//            // 图片区域 > 可见区域，进行缩放，找到适合的缩放精度
+//            int startScale = 1;
+//            mOptions.inSampleSize = 1;
+//            while (tmpImgHeight > visHeight
+//                    && tmpImgWidth > visWidth) {
+//                tmpImgHeight = tmpImgHeight >> 1;
+//                tmpImgWidth = tmpImgWidth >> 1;
+//                startScale = startScale << 1;
+//            }
+//            Log.d("TestView", "startStcale = " + startScale);
+//            mOptions.inSampleSize = startScale;
+//        }
 
         mDrawBitmap = mDecoder.decodeRegion(mPicRect, mOptions);
         Log.d("TestView", "pic.l = " + mPicRect.left + ", t = " + mPicRect.top + ", r = " + mPicRect.right + ", b = " + mPicRect.bottom);
@@ -230,6 +230,8 @@ public class TestView extends View {
     int mDownX;
     int mDownY;
     private Bitmap mDrawBitmap;
+    private int mViewWidth;
+    private int mViewHeight;
     /**
      * 模拟放大操作处理，可在线程中执行
      */
@@ -239,8 +241,8 @@ public class TestView extends View {
         // 定义放大点位置 (1/2 * vw, 1/3 * vh)
 //        int scaleX = mVisibleRect.width() >> 1;
 //        int scaleY = mVisibleRect.height() / 3;
-        int scaleX = mDownX;
-        int scaleY = mDownY;
+        int downX = mDownX;
+        int downY = mDownY;
 
         final float lastScale = mScale;
 
@@ -248,36 +250,33 @@ public class TestView extends View {
         final int screenHeight = getMeasuredHeight();
         final int screenWidth = getMeasuredWidth();
 
-
-//        int realScaleX = (int) (scaleX / lastScale + 0.5f);
-//        int realScaleY = (int) (scaleY / lastScale + 0.5f);
         // 计算上一次缩放参数下可视视图的宽高
         int visWidth = (int) (screenWidth * lastScale + 0.5f);
         int visHeight = visWidth * srcImageHeight / srcImageWidth;
 
         // 计算当前缩放中心点所在位置在当前屏幕中的比例值，以后续根据它来确定缩放后的位图区域
-        float scalePosFactorX = (float) scaleX / screenWidth;
-        float scalePosFactorY = (float) scaleY / screenHeight;
+        float scalePosFactorX = (float) downX / screenWidth;
+        float scalePosFactorY = (float) downY / screenHeight;
         int padding;
         // 当视图中除位图区域外还有留白，则需要考虑留白处点击的处理，此处按边界值计算
         if (visHeight < screenHeight) {
             padding = (screenHeight - visHeight) >> 1;
-            if (scaleY <= padding) {
+            if (downY <= padding) {
                 scalePosFactorY = 0f;
-            } else if (scaleY >= visHeight + padding) {
+            } else if (downY >= visHeight + padding) {
                 scalePosFactorY = 1f;
             } else {
-                scalePosFactorY = (float) (scaleY - padding) / visHeight;
+                scalePosFactorY = (float) (downY - padding) / visHeight;
             }
         }
         if (visWidth < screenWidth) {
             padding = (screenWidth - visWidth) >> 1;
-            if (scaleX < padding) {
+            if (downX < padding) {
                 scalePosFactorX = 0f;
-            } else if (scaleY >= visWidth + padding) {
+            } else if (downY >= visWidth + padding) {
                 scalePosFactorX = 1f;
             } else {
-                scalePosFactorX = (float) (scaleX - padding) / visWidth;
+                scalePosFactorX = (float) (downX - padding) / visWidth;
             }
         }
 
@@ -288,65 +287,118 @@ public class TestView extends View {
             curScale = 1;
         } else {
             // 此前处于默认或者缩小状态，判断是否位图高度小于可见视图高度，小于则计算缩放该差距，否则直接进行2倍放大
-            if (visHeight < screenHeight) {
+            if (screenWidth != 0 && visHeight < screenHeight) {
                 // (visHeight == screenHeight) = screenWidth * lastScale * srcImageHeight / srcImageWidth;
                 curScale = (screenHeight * srcImageWidth) / (screenWidth * srcImageHeight);
             } else
                 curScale = 2;
         }
+        Log.d("TestView", "curScale = " + curScale + ", lastScale = " + lastScale);
         // 根据新的缩放值计算当前可视视图区域及对应位图区域
         int realImgWidth = (int) (srcImageWidth / curScale + 0.5f);
         int realImgHeight = realImgWidth * getMeasuredHeight() / getMeasuredWidth();
+
+        // 区分是缩小还是放大
+        int lastScrollX = mScrollX;
+        int lastScrollY = mScrollY;
+        int curScrollX, curScrollY;
+        // 依据 (lastScrollX + downX) / (curScrollX + downX) = lastScale / curScale 及 curScrollX = lastScrollX + diffX
+        // 则当 diffX > 0 时，表示放大，因为可滚动区域变大了， diffX < 0 时，表示缩小
+        int diffX = (int) ((lastScrollX + downX) * (curScale / lastScale - 1) + 0.5f);
+        int diffY = (int) ((lastScrollY + downY) * (curScale / lastScale - 1) + 0.5f);
+        curScrollX = lastScrollX + diffX;
+        curScrollY = lastScrollY + diffY;
+        Log.d("TestView", "lastScrollX = " + lastScrollX + ", lastScrollY = " + lastScrollY
+         + ", curScrollX = " + curScrollX + ", curScrollY = " + curScrollY + ", diffX = " + diffX + ", diffY = " + diffY);
+        // 进行滚动距离边界的判断
+        if (curScrollX < 0)
+            curScrollX = 0;
+        else if (curScrollX > getScrollRangeX(curScale))
+            curScrollX = getScrollRangeX(curScale);
+        if (curScrollY < 0)
+            curScrollY = 0;
+        else if (curScrollY > getScrollRangeY(curScale))
+            curScrollY = getScrollRangeY(curScale);
+
         visWidth = (int) (screenWidth * curScale + 0.5f);
         visHeight = visWidth * srcImageHeight / srcImageWidth;
-
         // 表示新缩放值下，图片展示的可见区域在视图范围之内，置中
         // 有必要还需要考虑padding的存在,暂时这里先不考虑减少复杂度
-        if (visWidth <= screenWidth) {
+        float rW = srcImageWidth / (screenWidth * curScale);
+        Log.d("TestView", "rW = " + rW);
+        if (visWidth < screenWidth) {
             mVisibleRect.left = (screenWidth - visWidth) >> 1;
             mVisibleRect.right = mVisibleRect.left + visWidth;
             // 此时图片区域宽部分肯定是完全显示的
             mPicRect.left = 0;
             mPicRect.right = srcImageWidth;
+        } else {
+            Log.d("TestView", "viewWidth > screenWidth : curScrollX = " + curScrollX);
+            mVisibleRect.left = 0;
+            mVisibleRect.right = screenWidth;
+            mPicRect.left = (int) (curScrollX * rW + 0.5f);
+            mPicRect.right = (int) (mPicRect.left + screenWidth * rW + 0.5f);
+            if (mPicRect.right > srcImageWidth) {
+                mPicRect.right = screenWidth;
+            }
         }
-        if (visHeight <= screenHeight) {
+        if (visHeight < screenHeight) {
             mVisibleRect.top = (screenHeight - visHeight) >> 1;
             mVisibleRect.bottom = mVisibleRect.top + visHeight;
             mPicRect.top = 0;
             mPicRect.bottom = srcImageHeight;
-        }
-
-        // 区分是缩小还是放大
-        if (curScale > 1) {
         } else {
-
+            Log.d("TestView", "viewHeight > screenHeight : curScrollY = " + curScrollY);
+            mVisibleRect.top = 0;
+            mVisibleRect.bottom = screenHeight;
+            mPicRect.top = (int) (curScrollY * rW + 0.5f);
+            mPicRect.bottom = (int) (mPicRect.top + screenHeight * rW + 0.5f);
+            if (mPicRect.bottom > srcImageHeight)
+                mPicRect.bottom = srcImageHeight;
         }
 
+
+        Log.d("TestView", "pic.l = " + mPicRect.left + ", t = " + mPicRect.top + ", r = " + mPicRect.right + ", b = " + mPicRect.bottom);
+        Log.d("TestView", "vis.l = " + mVisibleRect.left + ", t = " + mVisibleRect.top + ", r = " + mVisibleRect.right + ", b = " + mVisibleRect.bottom);
+
+        mScrollX = curScrollX;
+        mScrollY = curScrollY;
         mScale = curScale;
+        mOptions.inBitmap = mDrawBitmap;
         mDrawBitmap = mDecoder.decodeRegion(mPicRect, mOptions);
         // 请求重新绘制
         postInvalidate();
+    }
 
-        // 计算中心点坐标的实际位置
-//        int relativeX = (int) (realImgWidth * ((float) scaleX / mVisibleRect.width()) + 0.5f);
-//        int relativeY = (int) (realImgHeight * ((float) scaleY / mVisibleRect.height()) + 0.5f);
-//        Log.d("TestView", "mockClick.call() rx = " + relativeX + ", ry = " + relativeY + ", riw = " +realImgWidth + ", rih = " + realImgHeight
-//        + ", realScaleX = " + realScaleX + ", realScaleY = " + realScaleY);
-//        if (relativeX > realScaleX + mScrollX) {
-//            mPicRect.left = 0;
-//            mPicRect.right = realImgWidth;
-//        } else {
-//            mPicRect.left = realScaleX + mScrollX - relativeX;
-//            mPicRect.right = mPicRect.left + realImgWidth;
-//        }
-//
-//        if (relativeY > realScaleY + mScrollY) {
-//            mPicRect.top = 0;
-//            mPicRect.bottom = realImgHeight;
-//        } else {
-//            mPicRect.top = relativeY + mScrollY - relativeY;
-//            mPicRect.bottom = mPicRect.top + realImgHeight;
-//        }
+    private boolean canScrollX(float scale) {
+        if (getMeasuredWidth() == 0) {
+            mViewWidth = 0;
+        } else if (mViewWidth == 0) {
+            mViewWidth = (int) (getMeasuredWidth() * scale + 0.5f);
+        }
+        return mViewWidth != 0 && mViewWidth > getMeasuredWidth();
+    }
+
+    private boolean canScrollY(float scale) {
+        if (getMeasuredHeight() == 0)
+            mViewHeight = 0;
+        else if (mViewHeight == 0) {
+            canScrollX(scale);
+            mViewHeight = mViewWidth * srcImageHeight / srcImageWidth;
+        }
+        return mViewHeight != 0 && mViewHeight > getMeasuredHeight();
+    }
+
+    private int getScrollRangeY(float scale) {
+        if (!canScrollY(scale))
+            return 0;
+        return mViewHeight - getMeasuredHeight();
+    }
+
+    private int getScrollRangeX(float scale) {
+        if (!canScrollX(scale))
+            return 0;
+        return mViewWidth - getMeasuredWidth();
     }
 
     @Override
